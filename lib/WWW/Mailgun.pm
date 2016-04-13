@@ -5,7 +5,6 @@ use warnings;
 
 use JSON;
 use MIME::Base64;
-use match::smart;
 
 require LWP::UserAgent;
 
@@ -13,10 +12,9 @@ BEGIN {
     our $VERSION = 0.53;
 }
 
-my @IGNORE_DOMAIN = qw/domains/;
-my @GET_METHODS = qw/stats domains log mailboxes/;
-my @POST_METHODS = qw//;
-my @ALL_METHODS = (@GET_METHODS, @POST_METHODS);
+my $IGNORE_DOMAIN = { domains => 1 };
+my $METHODS
+    = { stats => 1, domains => 1, log => 1, mailboxes => 1 };
 
 my $ALIAS__OPTION = {
     attachments => 'attachment',
@@ -28,34 +26,34 @@ my $OPTION__MAXIMUM = {
 };
 
 sub new {
-    my ($class, $param) = @_;
+    my ( $class, $param ) = @_;
 
     my $Key = $param->{key} // die "You must specify an API Key";
     my $Domain = $param->{domain} // die "You need to specify a domain (IE: samples.mailgun.org)";
-    my $Url = $param->{url} // "https://api.mailgun.net/v2";
+    my $Url  = $param->{url}  // "https://api.mailgun.net/v2";
     my $From = $param->{from} // "";
 
     my $self = {
-        ua  => LWP::UserAgent->new,
-        url => $Url . '/',
+        ua     => LWP::UserAgent->new,
+        url    => $Url . '/',
         domain => $Domain,
-        from => $From,
+        from   => $From,
     };
 
     $self->{get} = sub {
-        my ($self, $type, $data) = @_;
+        my ( $self, $type, $data ) = @_;
         return my $r = $self->{ua}->get(_get_route($self,[$type, $data]));
     };
 
     $self->{del} = sub {
-        my ($self, $type, $data) = @_;
+        my ( $self, $type, $data ) = @_;
         return my $r = $self->{ua}->request(
             HTTP::Request->new( 'DELETE', _get_route( $self, [$type, $data] ) )
         );
     };
 
     $self->{post} = sub {
-        my ($self, $type, $data) = @_;
+        my ( $self, $type, $data ) = @_;
         return my $r = $self->{ua}->post(_get_route($self,$type), Content_Type => 'multipart/form-data', Content => $data);
     };
 
@@ -69,41 +67,41 @@ sub _handle_response {
 
     my $rc = $response->code;
 
-    return 1 if 200 <= $rc && $rc <= 299; # success
+    return 1 if 200 <= $rc && $rc <= 299;    # success
 
-    my $json = from_json($response->decoded_content);
-    if ($json->{message}) {
-        die $response->status_line." ".$json->{message};
+    my $json = from_json( $response->decoded_content );
+    if ( $json->{message} ) {
+        die $response->status_line . " " . $json->{message};
     }
 
     die "Bad Request - Often missing a required parameter" if $rc == 400;
-    die "Unauthorized - No valid API key provided" if $rc == 401;
+    die "Unauthorized - No valid API key provided"         if $rc == 401;
     die "Request Failed - Parameters were valid but request failed" if $rc == 402;
     die "Not Found - The requested item doesn’t exist" if $rc == 404;
     die "Server Errors - something is wrong on Mailgun’s end" if $rc >= 500;
 }
 
 sub send {
-    my ($self, $msg)  = @_;
+    my ( $self, $msg ) = @_;
 
     $msg->{from} = $msg->{from} || $self->{from}
         or die "You must specify an email address to send from";
     $msg->{to} = $msg->{to}
         or die "You must specify an email address to send to";
-    if (ref $msg->{to} eq 'ARRAY') {
-        $msg->{to} = join(',',@{$msg->{to}});
+    if ( ref $msg->{to} eq 'ARRAY' ) {
+        $msg->{to} = join( ',', @{ $msg->{to} } );
     }
 
     $msg->{subject} = $msg->{subject} // "";
-    $msg->{text} = $msg->{text} // "";
+    $msg->{text}    = $msg->{text}    // "";
 
     my $content = _prepare_content($msg);
 
-    my $r = $self->{post}->($self, 'messages', $content);
+    my $r = $self->{post}->( $self, 'messages', $content );
 
     _handle_response($r);
 
-    return from_json($r->decoded_content);
+    return from_json( $r->decoded_content );
 }
 
 =head2 _prepare_content($option__values) : \@content
@@ -123,10 +121,10 @@ to
 sub _prepare_content {
     my ($option__values) = @_;
 
-    my $content = [];
+    my $content       = [];
     my $option__count = {};
 
-    while (my ($option, $values) = each %$option__values) {
+    while ( my ( $option, $values ) = each %$option__values ) {
         $option = $ALIAS__OPTION->{$option} || $option;
         $values = ref $values ? $values : [$values];
 
@@ -137,7 +135,7 @@ sub _prepare_content {
                 warn "Reached max number of $option, skipping...";
                 last;
             }
-            $value = [ $value ] if $option eq 'attachment';
+            $value = [$value] if $option eq 'attachment';
             push @$content, $option => $value;
         }
     }
@@ -146,44 +144,44 @@ sub _prepare_content {
 }
 
 sub _get_route {
-    my ($self, $path) = @_;
+    my ( $self, $path ) = @_;
 
-    if (ref $path eq 'ARRAY'){
+    if ( ref $path eq 'ARRAY' ) {
         my @clean = grep {defined} @$path;
         unshift @clean, $self->{domain}
-            unless $clean[-1] |M| @IGNORE_DOMAIN;
-        $path = join('/',@clean);
-    } elsif (!($path |M| @IGNORE_DOMAIN)) {
-        $path = $self->{domain} . '/' . $path
+            unless $IGNORE_DOMAIN->{ $clean[-1] };
+        $path = join( '/', @clean );
+    } elsif ( !( $IGNORE_DOMAIN->{$path} ) ) {
+        $path = $self->{domain} . '/' . $path;
     }
     return $self->{url} . $path;
 }
 
 sub unsubscribes {
-    my ($self, $method, $data) = @_;
+    my ( $self, $method, $data ) = @_;
     $method = $method // 'get';
 
-    my $r = $self->{lc($method)}->($self,'unsubscribes',$data);
+    my $r = $self->{ lc($method) }->( $self, 'unsubscribes', $data );
     _handle_response($r);
-    return from_json($r->decoded_content);
+    return from_json( $r->decoded_content );
 }
 
 sub complaints {
-    my ($self, $method, $data) = @_;
+    my ( $self, $method, $data ) = @_;
     $method = $method // 'get';
 
-    my $r = $self->{lc($method)}->($self,'complaints',$data);
+    my $r = $self->{ lc($method) }->( $self, 'complaints', $data );
     _handle_response($r);
-    return from_json($r->decoded_content);
+    return from_json( $r->decoded_content );
 }
 
 sub bounces {
-    my ($self, $method, $data) = @_;
+    my ( $self, $method, $data ) = @_;
     $method = $method // 'get';
 
-    my $r = $self->{lc($method)}->($self,'bounces',$data);
+    my $r = $self->{ lc($method) }->( $self, 'bounces', $data );
     _handle_response($r);
-    return from_json($r->decoded_content);
+    return from_json( $r->decoded_content );
 }
 
 sub logs {
@@ -192,20 +190,17 @@ sub logs {
     return $self->log();
 }
 
-sub AUTOLOAD { ## Handle generic list of requests.
+sub AUTOLOAD {    ## Handle generic list of requests.
     our $AUTOLOAD;
-    my $self = shift;
-    my @ObjParts = split(/\:\:/, $AUTOLOAD);
-    my $method = pop(@ObjParts);
-    return if $method eq 'DESTROY'; ## Ignore DESTROY.
-    unless ($method |M| @ALL_METHODS) {
-        die("Not a valid method, \"$method\".");
-    }
-    my $mode = 'get';
-    $mode = 'post' if $method |M| @POST_METHODS;
-    my $r = $self->{$mode}->($self, $method, @_);
+    my $self     = shift;
+    my @ObjParts = split( /\:\:/, $AUTOLOAD );
+    my $method   = pop(@ObjParts);
+    return if $method eq 'DESTROY';    ## Ignore DESTROY.
+    die(qq{Not a valid method, "$method".}) unless $METHODS->{$method};
+    my $mode = shift || 'get';
+    my $r = $self->{$mode}->( $self, $method, @_ );
     _handle_response($r);
-    return from_json($r->decoded_content);
+    return from_json( $r->decoded_content );
 }
 
 =pod
